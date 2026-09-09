@@ -1,0 +1,595 @@
+import webbrowser
+import threading
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+import sqlite3
+import secrets
+import os
+from datetime import datetime
+from functools import wraps
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key")
+DATABASE = "salary_mpc.db"
+
+def get_db():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            org_name TEXT NOT NULL,
+            industry TEXT,
+            role TEXT DEFAULT 'employee',
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS node_a (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            share INTEGER NOT NULL,
+            job_role TEXT,
+            experience TEXT,
+            industry TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS node_b (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            share INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS node_c (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            share INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS benchmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            average_salary REAL NOT NULL,
+            participant_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT NOT NULL,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+
+    admin_email = "admin@salarympc.com"
+
+    existing = cursor.execute(
+        "SELECT user_id FROM users WHERE email = ?",
+        (admin_email,)
+    ).fetchone()
+
+    if not existing:
+        cursor.execute("""
+            INSERT INTO users
+            (name, email, password, org_name, industry, role, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "Administrator",
+            admin_email,
+            generate_password_hash("admin123"),
+            "SalaryMPC",
+            "IT",
+            "admin",
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+
+    conn.close()
+
+def login_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if "user_id" not in session:
+            flash("Please login first.", "error")
+            return redirect(url_for("login"))
+        return func(*args, **kwargs)
+    return wrapper
+
+def admin_required(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if "user_id" not in session:
+            flash("Please login first.", "error")
+            return redirect(url_for("login"))
+
+        if session.get("role") != "admin":
+            flash("Administrator access required.", "error")
+            return redirect(url_for("dashboard"))
+
+        return func(*args, **kwargs)
+    return wrapper
+
+@app.route("/")
+def home():
+    if "user_id" in session:
+        return redirect(url_for("dashboard"))
+    return redirect(url_for("login"))
+
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+        organization = request.form.get("organization", "").strip()
+        industry = request.form.get("industry", "").strip()
+        role = request.form.get("role", "employee")
+
+        if not name or not email or not password or not organization:
+            flash("Please fill all required fields.", "error")
+            return redirect(url_for("register"))
+
+        if len(password) < 6:
+            flash("Password must contain at least 6 characters.", "error")
+            return redirect(url_for("register"))
+
+        role = "employee"
+
+        conn = get_db()
+
+        try:
+            conn.execute("""
+                INSERT INTO users
+                (name, email, password, org_name, industry, role, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                name,
+                email,
+                generate_password_hash(password),
+                organization,
+                industry,
+                role,
+                datetime.now().isoformat()
+            ))
+
+            conn.commit()
+
+            flash("Registration successful. Please login.", "success")
+            return redirect(url_for("login"))
+
+        except sqlite3.IntegrityError:
+            flash("An account with this email already exists.", "error")
+            return redirect(url_for("register"))
+
+        finally:
+            conn.close()
+
+    return render_template("register.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        conn = get_db()
+
+        user = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,)
+        ).fetchone()
+
+        conn.close()
+
+        if user and check_password_hash(user["password"], password):
+            session["user_id"] = user["user_id"]
+            session["name"] = user["name"]
+            session["role"] = user["role"]
+
+            flash("Login successful!", "success")
+
+            if user["role"] == "admin":
+                return redirect(url_for("admin_panel"))
+
+            return redirect(url_for("dashboard"))
+
+        flash("Invalid email or password.", "error")
+
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    flash("You have been logged out.", "success")
+    return redirect(url_for("login"))
+
+@app.route("/submit-salary", methods=["GET", "POST"])
+@login_required
+def submit_salary():
+    if request.method == "POST":
+        try:
+            salary = int(request.form.get("salary", 0))
+        except ValueError:
+            salary = 0
+
+        job_role = request.form.get("job_role", "").strip()
+        experience = request.form.get("experience", "").strip()
+        industry = request.form.get("industry", "").strip()
+
+        if salary <= 0:
+            flash("Please enter a valid salary.", "error")
+            return redirect(url_for("submit_salary"))
+
+        if not job_role or not experience or not industry:
+            flash("Please fill all fields.", "error")
+            return redirect(url_for("submit_salary"))
+
+        share_a = secrets.randbelow(2_000_000) - 1_000_000
+        share_b = secrets.randbelow(2_000_000) - 1_000_000
+        share_c = salary - share_a - share_b
+
+        timestamp = datetime.now().isoformat()
+        user_id = session["user_id"]
+
+        conn = get_db()
+
+        conn.execute("""
+            INSERT INTO node_a
+            (user_id, share, job_role, experience, industry, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            share_a,
+            job_role,
+            experience,
+            industry,
+            timestamp
+        ))
+
+        conn.execute("""
+            INSERT INTO node_b
+            (user_id, share, created_at)
+            VALUES (?, ?, ?)
+        """, (
+            user_id,
+            share_b,
+            timestamp
+        ))
+
+        conn.execute("""
+            INSERT INTO node_c
+            (user_id, share, created_at)
+            VALUES (?, ?, ?)
+        """, (
+            user_id,
+            share_c,
+            timestamp
+        ))
+
+        conn.execute("""
+            INSERT INTO audit_log
+            (user_id, action, details, created_at)
+            VALUES (?, ?, ?, ?)
+        """, (
+            user_id,
+            "SALARY_SUBMITTED",
+            f"Salary submitted for role: {job_role}",
+            timestamp
+        ))
+
+        conn.commit()
+        conn.close()
+
+        flash(
+            "Salary submitted securely. Your salary was split into shares.",
+            "success"
+        )
+
+        return redirect(url_for("dashboard"))
+
+    return render_template("submit.html")
+
+@app.route("/dashboard")
+@login_required
+def dashboard():
+    user_id = session["user_id"]
+
+    conn = get_db()
+
+    total_participants = conn.execute("""
+        SELECT COUNT(DISTINCT user_id)
+        FROM node_a
+    """).fetchone()[0]
+
+    user_submissions = conn.execute("""
+        SELECT COUNT(*)
+        FROM node_a
+        WHERE user_id = ?
+    """, (user_id,)).fetchone()[0]
+
+    latest = conn.execute("""
+        SELECT average_salary, participant_count, created_at
+        FROM benchmarks
+        ORDER BY id DESC
+        LIMIT 1
+    """).fetchone()
+
+    latest_average = latest["average_salary"] if latest else None
+
+    conn.close()
+
+    return render_template(
+        "dashboard.html",
+        total_participants=total_participants,
+        user_submissions=user_submissions,
+        latest_average=latest_average,
+        latest=latest
+    )
+
+@app.route("/run-benchmark", methods=["POST"])
+@login_required
+def run_benchmark():
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT
+            a.user_id,
+            a.share AS share_a,
+            b.share AS share_b,
+            c.share AS share_c
+        FROM node_a a
+        JOIN node_b b ON b.id = a.id
+        JOIN node_c c ON c.id = a.id
+        WHERE a.id IN (
+            SELECT MAX(id)
+            FROM node_a
+            GROUP BY user_id
+        )
+        ORDER BY a.id
+    """).fetchall()
+
+    if not rows:
+        conn.close()
+
+        flash(
+            "Not enough salary submissions to run the benchmark.",
+            "error"
+        )
+
+        return redirect(url_for("dashboard"))
+
+    salaries = []
+
+    for row in rows:
+        salary = (
+            row["share_a"]
+            + row["share_b"]
+            + row["share_c"]
+        )
+
+        salaries.append(salary)
+
+    participant_count = len(salaries)
+    average_salary = sum(salaries) / participant_count
+    timestamp = datetime.now().isoformat()
+
+    conn.execute("""
+        INSERT INTO benchmarks
+        (average_salary, participant_count, created_at)
+        VALUES (?, ?, ?)
+    """, (
+        average_salary,
+        participant_count,
+        timestamp
+    ))
+
+    conn.execute("""
+        INSERT INTO audit_log
+        (user_id, action, details, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        session["user_id"],
+        "BENCHMARK_RUN",
+        f"Secure benchmark calculated for {participant_count} unique participants",
+        timestamp
+    ))
+
+    conn.commit()
+    conn.close()
+
+    flash(
+        "Secure benchmark computation completed.",
+        "success"
+    )
+
+    return redirect(url_for("dashboard"))
+
+@app.route("/api/benchmark-history")
+@login_required
+def benchmark_history():
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT average_salary, participant_count, created_at
+        FROM benchmarks
+        ORDER BY id ASC
+    """).fetchall()
+
+    conn.close()
+
+    data = []
+
+    for row in rows:
+        data.append({
+            "average_salary": row["average_salary"],
+            "participant_count": row["participant_count"],
+            "created_at": row["created_at"]
+        })
+
+    return jsonify(data)
+
+@app.route("/api/salary-buckets")
+@login_required
+def salary_buckets():
+    conn = get_db()
+
+    node_a_rows = conn.execute(
+        "SELECT user_id, share FROM node_a"
+    ).fetchall()
+
+    node_b_rows = conn.execute(
+        "SELECT user_id, share FROM node_b"
+    ).fetchall()
+
+    node_c_rows = conn.execute(
+        "SELECT user_id, share FROM node_c"
+    ).fetchall()
+
+    salaries = []
+
+    for a, b, c in zip(
+        node_a_rows,
+        node_b_rows,
+        node_c_rows
+    ):
+        salary = a["share"] + b["share"] + c["share"]
+        salaries.append(salary)
+
+    conn.close()
+
+    buckets = {
+        "Below ₹3L": 0,
+        "₹3L - ₹5L": 0,
+        "₹5L - ₹8L": 0,
+        "₹8L - ₹12L": 0,
+        "₹12L - ₹20L": 0,
+        "Above ₹20L": 0
+    }
+
+    for salary in salaries:
+        if salary < 300000:
+            buckets["Below ₹3L"] += 1
+
+        elif salary < 500000:
+            buckets["₹3L - ₹5L"] += 1
+
+        elif salary < 800000:
+            buckets["₹5L - ₹8L"] += 1
+
+        elif salary < 1200000:
+            buckets["₹8L - ₹12L"] += 1
+
+        elif salary < 2000000:
+            buckets["₹12L - ₹20L"] += 1
+
+        else:
+            buckets["Above ₹20L"] += 1
+
+    result = []
+
+    for label, count in buckets.items():
+        if count >= 3:
+            result.append({
+                "label": label,
+                "count": count
+            })
+
+    return jsonify(result)
+
+@app.route("/admin")
+@admin_required
+def admin_panel():
+    conn = get_db()
+
+    node_counts = {
+        "node_a": conn.execute(
+            "SELECT COUNT(*) FROM node_a"
+        ).fetchone()[0],
+
+        "node_b": conn.execute(
+            "SELECT COUNT(*) FROM node_b"
+        ).fetchone()[0],
+
+        "node_c": conn.execute(
+            "SELECT COUNT(*) FROM node_c"
+        ).fetchone()[0]
+    }
+
+    users = conn.execute("""
+        SELECT
+            user_id,
+            name,
+            email,
+            role,
+            org_name,
+            created_at
+        FROM users
+        ORDER BY user_id DESC
+    """).fetchall()
+
+    logs = conn.execute("""
+        SELECT
+            audit_log.*,
+            users.name
+        FROM audit_log
+        LEFT JOIN users
+        ON audit_log.user_id = users.user_id
+        ORDER BY audit_log.id DESC
+        LIMIT 50
+    """).fetchall()
+
+    conn.close()
+
+    return render_template(
+        "admin.html",
+        node_counts=node_counts,
+        users=users,
+        logs=logs
+    )
+
+if __name__ == "__main__":
+    init_db()
+
+    print()
+    print("=" * 55)
+    print("        SalaryMPC - Salary Benchmarking")
+    print("=" * 55)
+    print()
+    print("Application running at:")
+    print("http://127.0.0.1:5000")
+    print()
+    print("Default Admin:")
+    print("Email: admin@salarympc.com")
+    print("Password: admin123")
+    print()
+    print("=" * 55)
+
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True
+    )

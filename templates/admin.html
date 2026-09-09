@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Panel - SalaryMPC{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <h1>Admin Panel</h1>
+    <p>System administration and monitoring</p>
+</div>
+
+<div class="stats-grid">
+
+    <div class="card">
+        <h3>Node A Shares</h3>
+        <p>{{ node_counts.node_a }}</p>
+    </div>
+
+    <div class="card">
+        <h3>Node B Shares</h3>
+        <p>{{ node_counts.node_b }}</p>
+    </div>
+
+    <div class="card">
+        <h3>Node C Shares</h3>
+        <p>{{ node_counts.node_c }}</p>
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h2>Registered Users</h2>
+
+    {% if users %}
+
+    <div style="overflow-x:auto;">
+
+        <table class="table">
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Organization</th>
+                    <th>Role</th>
+                    <th>Created At</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for user in users %}
+
+                <tr>
+                    <td>{{ user.user_id }}</td>
+                    <td>{{ user.name }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ user.org_name }}</td>
+                    <td>{{ user.role }}</td>
+                    <td>{{ user.created_at }}</td>
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+    {% else %}
+
+    <p class="muted">No registered users found.</p>
+
+    {% endif %}
+
+</div>
+
+<div class="card">
+
+    <h2>Audit Log</h2>
+
+    {% if logs %}
+
+    <div style="overflow-x:auto;">
+
+        <table class="table">
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Details</th>
+                    <th>Time</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                {% for log in logs %}
+
+                <tr>
+                    <td>{{ log.id }}</td>
+                    <td>{{ log.name or "System" }}</td>
+                    <td>{{ log.action }}</td>
+                    <td>{{ log.details }}</td>
+                    <td>{{ log.created_at }}</td>
+                </tr>
+
+                {% endfor %}
+
+            </tbody>
+
+        </table>
+
+    </div>
+
+    {% else %}
+
+    <p class="muted">No audit records found.</p>
+
+    {% endif %}
+
+</div>
+
+{% endblock %}

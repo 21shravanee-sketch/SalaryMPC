@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - SalaryMPC{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <h1>Salary Benchmark Dashboard</h1>
+    <p>Welcome, {{ session.get("name", "User") }}!</p>
+</div>
+
+<div class="stats-grid">
+
+    <div class="card">
+        <h3>Total Participants</h3>
+        <p>{{ total_participants|default(0) }}</p>
+    </div>
+
+    <div class="card">
+        <h3>Your Submissions</h3>
+        <p>{{ user_submissions|default(0) }}</p>
+    </div>
+
+    <div class="card">
+
+        <h3>Latest Average Salary</h3>
+
+        {% if latest_average %}
+
+            <p>
+                ₹{{ "{:,.0f}".format(latest_average) }}
+            </p>
+
+        {% else %}
+
+            <p>Not available</p>
+
+        {% endif %}
+
+    </div>
+
+</div>
+
+<div class="card">
+
+    <h2>Run Salary Benchmark</h2>
+
+    <p>
+        Calculate the average salary securely using
+        multi-party salary shares.
+    </p>
+
+    <form method="POST" action="{{ url_for('run_benchmark') }}">
+
+        <button type="submit">
+            Run Benchmark
+        </button>
+
+    </form>
+
+</div>
+
+<div class="charts-grid">
+
+    <div class="card">
+
+        <h2>Benchmark History</h2>
+
+        <p class="muted">
+            Average salary calculated during each benchmark run.
+        </p>
+
+        <div class="chart-container">
+
+            <canvas id="trendChart"></canvas>
+
+        </div>
+
+    </div>
+
+    <div class="card">
+
+        <h2>Salary Distribution</h2>
+
+        <p id="bucketMessage" class="muted">
+            Loading salary distribution...
+        </p>
+
+        <div class="chart-container">
+
+            <canvas id="bucketChart"></canvas>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<script>
+
+async function loadCharts() {
+
+    try {
+
+        const response =
+            await fetch("/api/benchmark-history");
+
+        const history =
+            await response.json();
+
+        const labels =
+            history.map((item, index) =>
+                "Run " + (index + 1)
+            );
+
+        const values =
+            history.map(item =>
+                item.average_salary
+            );
+
+        const trendCanvas =
+            document.getElementById("trendChart");
+
+        if (history.length === 0) {
+
+            trendCanvas.style.display = "none";
+
+        } else {
+
+            new Chart(trendCanvas, {
+
+                type: "line",
+
+                data: {
+
+                    labels: labels,
+
+                    datasets: [{
+
+                        label: "Average Salary (₹)",
+
+                        data: values,
+
+                        borderColor: "#2563eb",
+
+                        backgroundColor: "transparent",
+
+                        fill: false,
+
+                        tension: 0.3,
+
+                        borderWidth: 2,
+
+                        pointRadius: 4,
+
+                        pointHoverRadius: 6
+
+                    }]
+
+                },
+
+                options: {
+
+                    responsive: true,
+
+                    maintainAspectRatio: false,
+
+                    plugins: {
+
+                        legend: {
+
+                            display: true
+
+                        }
+
+                    },
+
+                    scales: {
+
+                        y: {
+
+                            beginAtZero: false,
+
+                            ticks: {
+
+                                callback: function(value) {
+
+                                    return "₹" +
+                                        Number(value).toLocaleString("en-IN");
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            });
+
+        }
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Benchmark history error:",
+            error
+        );
+
+    }
+
+    try {
+
+        const response =
+            await fetch("/api/salary-buckets");
+
+        const buckets =
+            await response.json();
+
+        const message =
+            document.getElementById("bucketMessage");
+
+        const bucketCanvas =
+            document.getElementById("bucketChart");
+
+        if (!buckets || buckets.length === 0) {
+
+            message.textContent =
+                "Salary distribution is hidden because there are not enough participants in a salary range.";
+
+            bucketCanvas.style.display = "none";
+
+        }
+
+        else {
+
+            message.textContent =
+                "Only salary ranges containing at least 3 participants are displayed.";
+
+            const labels =
+                buckets.map(item =>
+                    item.label
+                );
+
+            const values =
+                buckets.map(item =>
+                    item.count
+                );
+
+            new Chart(bucketCanvas, {
+
+                type: "bar",
+
+                data: {
+
+                    labels: labels,
+
+                    datasets: [{
+
+                        label: "Participants",
+
+                        data: values,
+
+                        backgroundColor: "#0ea5e9",
+
+                        borderWidth: 0
+
+                    }]
+
+                },
+
+                options: {
+
+                    responsive: true,
+
+                    maintainAspectRatio: false,
+
+                    plugins: {
+
+                        legend: {
+
+                            display: true
+
+                        }
+
+                    },
+
+                    scales: {
+
+                        y: {
+
+                            beginAtZero: true,
+
+                            ticks: {
+
+                                stepSize: 1
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            });
+
+        }
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Salary bucket error:",
+            error
+        );
+
+        document.getElementById("bucketMessage").textContent =
+            "Unable to load salary distribution.";
+
+    }
+
+}
+
+loadCharts();
+
+</script>
+
+<style>
+
+.chart-container {
+
+    position: relative;
+
+    width: 100%;
+
+    height: 220px;
+
+}
+
+.muted {
+
+    color: #6b7280;
+
+    font-size: 14px;
+
+    margin-bottom: 12px;
+
+}
+
+</style>
+
+{% endblock %}

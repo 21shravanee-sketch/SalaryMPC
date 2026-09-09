@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}SalaryMPC{% endblock %}</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+
+{% if request.endpoint not in ['login', 'register'] %}
+<nav class="navbar">
+
+    <div class="navbar-brand">🔒 SalaryMPC</div>
+
+    <div class="navbar-links">
+
+        {% if session.get('user_id') %}
+
+            <a href="{{ url_for('dashboard') }}">Dashboard</a>
+
+            <a href="{{ url_for('submit_salary') }}">Submit Salary</a>
+
+            {% if session.get('role') == 'admin' %}
+                <a href="{{ url_for('admin_panel') }}">Admin</a>
+            {% endif %}
+
+            <a href="{{ url_for('logout') }}">Logout</a>
+
+        {% else %}
+
+            <a href="{{ url_for('login') }}">Login</a>
+            <a href="{{ url_for('register') }}">Register</a>
+
+        {% endif %}
+
+    </div>
+
+</nav>
+{% endif %}
+
+<main class="container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+
+        {% if messages %}
+
+            {% for category, message in messages %}
+
+                <div class="flash flash-{{ category }}">
+                    {{ message }}
+                </div>
+
+            {% endfor %}
+
+        {% endif %}
+
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+
+</main>
+
+<footer class="footer">
+    <p>SalaryMPC &copy; 2026 | Secure Salary Benchmarking</p>
+</footer>
+
+</body>
+</html>
